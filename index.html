@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#141414" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="CineLocal" />
+    <title>CineLocal - Biblioteca Offline</title>
+    <meta name="description" content="Biblioteca de mídia local estilo Netflix, offline para PC/pendrive com filmes, séries, torrents e canais de TV ao vivo via IPTV." />
+    <meta property="og:title" content="CineLocal - Biblioteca Offline" />
+    <meta property="og:description" content="Biblioteca de mídia local estilo Netflix, offline para PC/pendrive com filmes, séries, torrents e canais de TV ao vivo via IPTV." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      window.__gCastApiAvailable = false;
+      window.__onGCastApiAvailable = function (isAvailable) {
+        window.__gCastApiAvailable = isAvailable;
+        window.dispatchEvent(new Event('cinelocal-cast-available'));
+      };
+    </script>
+    <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

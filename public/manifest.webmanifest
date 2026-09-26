@@ -1,0 +1,31 @@
+{
+  "id": "/",
+  "name": "CineLocal - Biblioteca Offline",
+  "short_name": "CineLocal",
+  "description": "Biblioteca de mídia local estilo Netflix, 100% offline para rodar do PC ou pendrive.",
+  "theme_color": "#141414",
+  "background_color": "#141414",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

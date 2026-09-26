@@ -1,0 +1,8 @@
+{
+  "name": "Remix LocalFlix",
+  "description": "A portable, offline media library manager that organizes and streams your local video collection with a Netflix-style interface.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

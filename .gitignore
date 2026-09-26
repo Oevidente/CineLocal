@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+.cache/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+certs/
+data/library.json
+data/library.json
+data/metadata
+data 

@@ -1,0 +1,6 @@
+{
+  "summary":  "Plano arquitetural detalhado para migrar o catálogo de mídia local para o GitHub Pages sem Node.js e sem banco de dados, utilizando File System Access API para leitura e escrita local de arquivos, WebAssembly FFmpeg para reprodução e remux de formatos como MKV, e Service Worker com COOP/COEP para multithreading.",
+  "updatedAt":  "2026-09-26T16:18:47.841683720Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
