@@ -143,3 +143,20 @@ export async function getClientLibrary(): Promise<LibraryData | null> {
     return null;
   }
 }
+
+export async function deleteClientMediaItem(mediaId: string): Promise<void> {
+  try {
+    // 1. Remove directory handle if any
+    await removeDirectoryHandle(mediaId);
+
+    // 2. Remove media from offline library in IndexedDB
+    const current = await getClientLibrary();
+    if (current && Array.isArray(current.items)) {
+      current.items = current.items.filter((item) => item.id !== mediaId);
+      await saveClientLibrary(current);
+    }
+  } catch (err) {
+    console.warn('[CineLocal] Falha ao excluir item da biblioteca offline:', err);
+  }
+}
+

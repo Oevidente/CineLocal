@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, HardDrive, CheckCircle, AlertTriangle, Terminal, FileJson, Download, Loader2, Zap, Cpu, Smartphone, Subtitles, Film, Key, RefreshCw, Sparkles, ExternalLink } from 'lucide-react';
 import { SystemStatus } from '../types';
-import { MobileAccessBanner } from './MobileAccessBanner';
 
 interface SystemModalProps {
   onClose: () => void;
@@ -342,10 +341,6 @@ export const SystemModal: React.FC<SystemModalProps> = ({
               </div>
             </div>
 
-            {/* PWA & Mobile Access */}
-            <div className="space-y-2">
-              <MobileAccessBanner />
-            </div>
 
             {/* TMDb Integration (Metadata & Covers) */}
             <div className="p-3 rounded-lg bg-neutral-900 border border-neutral-800 space-y-2.5">

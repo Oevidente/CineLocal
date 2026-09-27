@@ -597,16 +597,17 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             )}
 
             {confirmDelete ? (
-              <div className="flex items-center space-x-1">
+              <div className="flex items-center space-x-1.5 bg-red-950/80 p-1 rounded-lg border border-red-800">
                 <button
                   onClick={() => onDeleteMedia(media.id)}
-                  className="px-2 py-1 rounded bg-red-800 hover:bg-red-700 text-white font-bold text-xs"
+                  className="px-3 py-1.5 rounded bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center space-x-1.5 cursor-pointer shadow-lg transition-all"
                 >
-                  Confirmar Remoção
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Confirmar Remoção</span>
                 </button>
                 <button
                   onClick={() => setConfirmDelete(false)}
-                  className="px-2 py-1 rounded bg-neutral-700 hover:bg-neutral-600 text-white text-xs"
+                  className="px-2.5 py-1.5 rounded bg-neutral-700 hover:bg-neutral-600 text-neutral-200 text-xs cursor-pointer transition-all"
                 >
                   Cancelar
                 </button>
@@ -614,10 +615,11 @@ export const MediaDetailModal: React.FC<MediaDetailModalProps> = ({
             ) : (
               <button
                 onClick={() => setConfirmDelete(true)}
-                className="p-1.5 rounded bg-neutral-800 hover:bg-red-950/40 text-neutral-400 hover:text-red-400 transition-colors border border-white/5"
-                title="Remover da biblioteca (não apaga os arquivos do PC)"
+                className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded font-medium transition-colors bg-neutral-800 hover:bg-red-950/60 text-neutral-300 hover:text-red-400 border border-white/5 cursor-pointer"
+                title="Remover título da biblioteca (não apaga os arquivos de vídeo do seu computador)"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                <span>Excluir Cadastro</span>
               </button>
             )}
           </div>

@@ -155,6 +155,26 @@ class ClientFileRegistry {
     }
   }
 
+  async removeMedia(mediaId: string): Promise<void> {
+    if (this.inMemoryLibrary && Array.isArray(this.inMemoryLibrary.items)) {
+      this.inMemoryLibrary.items = this.inMemoryLibrary.items.filter((item) => item.id !== mediaId);
+      await saveClientLibrary(this.inMemoryLibrary);
+    }
+    this.dirHandles.delete(mediaId);
+
+    // Clean up episode handles and blob urls
+    for (const [epId] of this.episodeHandles.entries()) {
+      if (epId.startsWith(`${mediaId}_`)) {
+        this.episodeHandles.delete(epId);
+        const url = this.blobUrls.get(epId);
+        if (url) {
+          URL.revokeObjectURL(url);
+          this.blobUrls.delete(epId);
+        }
+      }
+    }
+  }
+
   clear() {
     this.blobUrls.forEach((url) => URL.revokeObjectURL(url));
     this.blobUrls.clear();

@@ -12,12 +12,11 @@ import { TorrentModal } from './components/TorrentModal';
 import { TorrentPlayer } from './components/TorrentPlayer';
 import { ChannelsPage } from './components/ChannelsPage';
 import { IptvPlayerModal } from './components/IptvPlayerModal';
-import { MobileAccessBanner } from './components/MobileAccessBanner';
 import { LibraryData, MediaItem, Episode, OnlineSubtitleOption, TorrentStatus, IptvChannel } from './types';
 import { FolderPlus, Film, Tv, Play, HardDrive, RefreshCw, Radio } from 'lucide-react';
 import { scanDirectoryHandle } from './services/clientScanner';
 import { clientFileRegistry } from './services/clientFileRegistry';
-import { getClientLibrary, verifyPermission } from './services/clientStorage';
+import { getClientLibrary, verifyPermission, deleteClientMediaItem } from './services/clientStorage';
 import { getClientFavorites, saveClientFavorites } from './services/clientIptv';
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -193,6 +192,7 @@ export default function App() {
 
   // Client-side File System Access API folder handler
   const handleAddClientFolder = async (dirHandle: FileSystemDirectoryHandle) => {
+    setShowAddModal(false);
     const hasPermission = await verifyPermission(dirHandle, true);
     if (!hasPermission) {
       throw new Error('Permissão negada para acessar a pasta selecionada.');
@@ -205,6 +205,7 @@ export default function App() {
 
   // Add folder handler
   const handleAddFolder = async (folderPath: string, title?: string) => {
+    setShowAddModal(false);
     const res = await fetch('/api/library/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -215,7 +216,6 @@ export default function App() {
       throw new Error(data.error || 'Erro ao adicionar pasta');
     }
     if (data.item) {
-      setActiveMediaDetail(data.item);
       setLibrary((prev) => {
         if (!prev) return prev;
         const exists = prev.items.some((i) => i.id === data.item.id);
@@ -226,8 +226,8 @@ export default function App() {
             : [data.item, ...prev.items],
         };
       });
+      setActiveMediaDetail(data.item);
     }
-    await fetchLibrary();
   };
 
   // Rescan media folder
@@ -416,14 +416,21 @@ export default function App() {
       };
     });
 
+    // 1. Purge from browser offline storage (IndexedDB) and memory registry
+    try {
+      await deleteClientMediaItem(mediaId);
+      await clientFileRegistry.removeMedia(mediaId);
+    } catch (err) {
+      console.warn('Erro ao remover mídia do cache local:', err);
+    }
+
+    // 2. Also send delete command to Node.js backend if server is active
     try {
       await fetch(`/api/library/${mediaId}`, {
         method: 'DELETE',
       });
-      fetchLibrary();
-    } catch (e) {
-      console.error('Erro ao excluir mídia:', e);
-      fetchLibrary();
+    } catch {
+      // Backend not running (GitHub Pages static host)
     }
   };
 
@@ -815,11 +822,6 @@ export default function App() {
               Você pode copiar essa pasta inteira para um pendrive e abrir dando duplo clique em <strong className="text-white">start.bat</strong>.
             </p>
           </div>
-
-          {/* Mobile Access Instruction Banner on Empty State */}
-          <div className="mt-8 w-full max-w-2xl text-left">
-            <MobileAccessBanner />
-          </div>
         </div>
       ) : (
         /* Populated Library View */
@@ -835,12 +837,6 @@ export default function App() {
 
           {/* Rows Container */}
           <main className={`relative z-20 ${heroMedia && !searchQuery ? 'mt-3 sm:mt-6 lg:mt-8' : 'pt-28 sm:pt-32 lg:pt-36'}`}>
-            {/* Mobile Access Instruction Banner on Home Screen */}
-            {!searchQuery && activeTab === 'all' && (
-              <div className="px-4 sm:px-6 lg:px-8 mb-6 sm:mb-8">
-                <MobileAccessBanner />
-              </div>
-            )}
             {/* 1. Continuar Assistindo Row (Backdrop card variant with progress bar) */}
             {continueWatchingItems.length > 0 && activeTab !== 'series' && activeTab !== 'movie' && (
               <MediaRow
