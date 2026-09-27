@@ -18,6 +18,7 @@ import { FolderPlus, Film, Tv, Play, HardDrive, RefreshCw, Radio } from 'lucide-
 import { scanDirectoryHandle } from './services/clientScanner';
 import { clientFileRegistry } from './services/clientFileRegistry';
 import { getClientLibrary, verifyPermission } from './services/clientStorage';
+import { getClientFavorites, saveClientFavorites } from './services/clientIptv';
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -53,24 +54,31 @@ export default function App() {
 
   // IPTV Live Channels State
   const [iptvPlaying, setIptvPlaying] = useState<{ channel: IptvChannel; allChannels: IptvChannel[] } | null>(null);
-  const [iptvFavorites, setIptvFavorites] = useState<string[]>([]);
+  const [iptvFavorites, setIptvFavorites] = useState<string[]>(() => getClientFavorites());
 
   // Fetch IPTV favorites
   useEffect(() => {
     fetch('/api/iptv/favorites')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('API não disponível');
+        return res.json();
+      })
       .then((data) => {
         if (Array.isArray(data.favorites)) {
           setIptvFavorites(data.favorites);
+          saveClientFavorites(data.favorites);
         }
       })
-      .catch((err) => console.error('Erro ao carregar favoritos IPTV:', err));
+      .catch(() => {
+        // Fallback to client localStorage favorites already loaded
+      });
   }, []);
 
   const handleToggleIptvFavorite = async (channelId: string) => {
     const isFav = iptvFavorites.includes(channelId);
     const updated = isFav ? iptvFavorites.filter((id) => id !== channelId) : [...iptvFavorites, channelId];
     setIptvFavorites(updated);
+    saveClientFavorites(updated);
 
     try {
       await fetch('/api/iptv/favorites', {
@@ -78,8 +86,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channelId, isFavorite: !isFav }),
       });
-    } catch (err) {
-      console.error('Erro ao sincronizar favorito IPTV:', err);
+    } catch {
+      // Local client storage updated successfully
     }
   };
 

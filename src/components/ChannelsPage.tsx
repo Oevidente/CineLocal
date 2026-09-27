@@ -23,6 +23,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { IptvChannel, IptvPreset, IptvPlaylistSummary, ChannelStatusInfo } from '../types';
+import { CLIENT_IPTV_PRESETS, fetchPlaylistWithFallback } from '../services/clientIptv';
 
 interface ChannelsPageProps {
   onPlayChannel: (channel: IptvChannel, allChannels: IptvChannel[]) => void;
@@ -30,7 +31,7 @@ interface ChannelsPageProps {
   onToggleFavorite: (channelId: string) => void;
 }
 
-const DEFAULT_PLAYLIST_URL = 'https://iptv-org.github.io/iptv/index.m3u';
+const DEFAULT_PLAYLIST_URL = 'https://iptv-org.github.io/iptv/countries/br.m3u';
 
 export const ChannelsPage: React.FC<ChannelsPageProps> = ({
   onPlayChannel,
@@ -65,18 +66,29 @@ export const ChannelsPage: React.FC<ChannelsPageProps> = ({
   // Load presets & status map
   useEffect(() => {
     fetch('/api/iptv/presets')
-      .then((res) => res.json())
-      .then((data) => setPresets(data))
-      .catch((err) => console.error('Erro ao carregar presets IPTV:', err));
-
-    fetch('/api/iptv/statuses')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('API não disponível');
+        return res.json();
+      })
       .then((data) => {
-        if (data && typeof data === 'object') {
-          setStatusMap(data);
+        if (Array.isArray(data) && data.length > 0) {
+          setPresets(data);
+        } else {
+          setPresets(CLIENT_IPTV_PRESETS);
         }
       })
-      .catch((err) => console.error('Erro ao carregar status dos canais:', err));
+      .catch(() => {
+        setPresets(CLIENT_IPTV_PRESETS);
+      });
+
+    fetch('/api/iptv/statuses')
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((data) => {
+        if (data && typeof data === 'object') {
+          setStatusMap(data as Record<string, ChannelStatusInfo>);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Fetch playlist
@@ -84,12 +96,7 @@ export const ChannelsPage: React.FC<ChannelsPageProps> = ({
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(`/api/iptv/playlist?url=${encodeURIComponent(url)}${forceRefresh ? '&refresh=true' : ''}`);
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Falha ao carregar lista de canais IPTV');
-      }
-      const data: IptvPlaylistSummary = await res.json();
+      const data = await fetchPlaylistWithFallback(url, forceRefresh);
       setPlaylistData(data);
       setCurrentPage(1);
     } catch (err: any) {

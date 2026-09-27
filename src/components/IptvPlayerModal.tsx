@@ -89,7 +89,12 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   // Stream connection settings
-  const [streamMode, setStreamMode] = useState<StreamMode>('proxy');
+  const [streamMode, setStreamMode] = useState<StreamMode>(() => {
+    if (typeof window !== 'undefined' && (window.location.hostname.includes('github.io') || window.location.protocol === 'file:')) {
+      return 'direct';
+    }
+    return 'proxy';
+  });
   const [uaProfile, setUaProfile] = useState<UserAgentProfile>('vlc');
   const [geoProfile, setGeoProfile] = useState<GeoProfile>('auto');
   const [showSettings, setShowSettings] = useState<boolean>(false);
@@ -272,8 +277,10 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
   );
 
   useEffect(() => {
-    setStreamMode('proxy');
-    loadStream(channel.url, 'proxy');
+    const isStaticHost = typeof window !== 'undefined' && (window.location.hostname.includes('github.io') || window.location.protocol === 'file:');
+    const targetMode: StreamMode = isStaticHost ? 'direct' : streamMode;
+    setStreamMode(targetMode);
+    loadStream(channel.url, targetMode);
 
     return () => {
       if (hlsRef.current) {
