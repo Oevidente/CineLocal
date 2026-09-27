@@ -26,6 +26,7 @@ import {
   SubtitleTrackInfo,
 } from '../types';
 import { formatTime } from '../utils';
+import { clientFileRegistry } from '../services/clientFileRegistry';
 import {
   getCastContext,
   getCastErrorMessage,
@@ -402,14 +403,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           subtitleIndex: subtitleIndexOverride ?? selectedSubtitleIndex,
         };
 
+        const isClientMedia =
+          clientFileRegistry.hasEpisode(episode.id) ||
+          media.folderPath?.startsWith('local://');
+
+        if (isClientMedia) {
+          clientFileRegistry
+            .saveProgress(
+              media.id,
+              episode.id,
+              Math.floor(timeSec),
+              totalDur || duration,
+              completed,
+              audioIndexOverride ?? selectedAudioIndexRef.current,
+              subtitleIndexOverride ?? selectedSubtitleIndex,
+            )
+            .catch((e) => console.warn('[CineLocal] Erro ao salvar progresso offline:', e));
+        }
+
         try {
           fetch('/api/library/progress', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
-          }).catch((err) => console.error('Error saving progress:', err));
+          }).catch((err) => {
+            if (!isClientMedia) console.error('Error saving progress:', err);
+          });
         } catch (e) {
-          console.error('Error saving progress:', e);
+          if (!isClientMedia) console.error('Error saving progress:', e);
         }
       };
 
@@ -1107,6 +1128,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hlsRef.current = null;
     }
 
+    const isClientMedia =
+      clientFileRegistry.hasEpisode(episode.id) ||
+      media.folderPath?.startsWith('local://');
+
+    if (isClientMedia) {
+      let isCancelled = false;
+      clientFileRegistry.getVideoBlobUrl(episode.id).then((blobUrl) => {
+        if (isCancelled || !video) return;
+        if (!blobUrl) {
+          setPlaybackError('Não foi possível acessar o arquivo de vídeo do disco.');
+          return;
+        }
+
+        video.src = blobUrl;
+        const onLoaded = () => {
+          if (video.duration && isFinite(video.duration)) {
+            setDuration(video.duration);
+          }
+          if (initialSeek > 0) {
+            video.currentTime = initialSeek;
+          }
+          if (resumePlayback && !castActiveRef.current) {
+            video.play().catch(() => {});
+          }
+        };
+        video.addEventListener('loadedmetadata', onLoaded, { once: true });
+      });
+
+      return () => {
+        isCancelled = true;
+      };
+    }
+
     const shouldUseHls =
       !isDirectMP4 || isForceTranscode || selectedAudioIndex > 0;
     const hlsStartOffset = shouldUseHls ? Math.max(0, initialSeek) : 0;
@@ -1341,6 +1395,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
 
     const track = episode.subtitleTracks[selectedSubtitleIndex];
+
+    if (track.filePath && clientFileRegistry.getSubtitleHandle(track.filePath)) {
+      clientFileRegistry
+        .getSubtitleText(track.filePath)
+        .then((text) => {
+          if (!cancelled && text) setSubtitleCues(parseWebVtt(text));
+        })
+        .catch(() => {
+          if (!cancelled) setSubtitleCues([]);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     fetch(
       `/api/media/${media.id}/episode/${episode.id}/subtitles/${track.index}`,
     )

@@ -5,12 +5,14 @@ import { FolderBrowser } from './FolderBrowser';
 interface AddMediaModalProps {
   onClose: () => void;
   onAddFolder: (folderPath: string, title?: string) => Promise<void>;
+  onAddClientFolder?: (dirHandle: FileSystemDirectoryHandle) => Promise<void>;
   initialFolderPath?: string;
 }
 
 export const AddMediaModal: React.FC<AddMediaModalProps> = ({
   onClose,
   onAddFolder,
+  onAddClientFolder,
   initialFolderPath = '',
 }) => {
   const [folderPath, setFolderPath] = useState(initialFolderPath);
@@ -19,6 +21,7 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
   const [showBrowser, setShowBrowser] = useState(!initialFolderPath);
   const [isScanning, setIsScanning] = useState(false);
   const [isPickingNative, setIsPickingNative] = useState(false);
+  const [isPickingBrowserFolder, setIsPickingBrowserFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -100,6 +103,32 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
     }
   };
 
+  const handlePickBrowserFolder = async () => {
+    if (typeof (window as any).showDirectoryPicker !== 'function') {
+      setError('A API de seleção de pastas do navegador não é suportada neste navegador. Utilize o Google Chrome, Edge, Brave ou Opera.');
+      return;
+    }
+
+    try {
+      setIsPickingBrowserFolder(true);
+      setError(null);
+      const dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' });
+      if (!dirHandle) return;
+
+      if (onAddClientFolder) {
+        await onAddClientFolder(dirHandle);
+        onClose();
+        return;
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        setError(err.message || 'Erro ao selecionar pasta do computador.');
+      }
+    } finally {
+      setIsPickingBrowserFolder(false);
+    }
+  };
+
   return (
     <div
       id="add-media-modal-backdrop"
@@ -137,6 +166,50 @@ export const AddMediaModal: React.FC<AddMediaModalProps> = ({
           <div className="mb-4 p-3 rounded-lg bg-red-950/50 border border-red-800/60 flex items-start space-x-2 text-xs text-red-300">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {/* File System Access API (Client-side / Browser Direct) */}
+        {typeof window !== 'undefined' && 'showDirectoryPicker' in window && (
+          <div className="mb-5 p-3.5 rounded-xl bg-gradient-to-r from-red-950/30 via-neutral-900 to-neutral-900 border border-red-800/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+            <div>
+              <div className="flex items-center gap-2 font-bold text-white text-sm">
+                <span>📁 Conectar Pasta pelo Navegador</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-600/30 text-red-300 font-mono">100% OFFLINE</span>
+              </div>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Abre pastas de vídeos direto no navegador (Chrome/Edge). Salva progresso no <code className="text-neutral-300">library.json</code> local.
+              </p>
+            </div>
+            <button
+              type="button"
+              id="btn-pick-browser-folder"
+              onClick={handlePickBrowserFolder}
+              disabled={isPickingBrowserFolder || isScanning}
+              className="px-3.5 py-2 rounded-lg bg-[#E50914] hover:bg-[#b80710] text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow transition-all shrink-0 cursor-pointer disabled:opacity-50"
+            >
+              {isPickingBrowserFolder ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Escaneando...</span>
+                </>
+              ) : (
+                <>
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>Selecionar no Navegador</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {typeof window !== 'undefined' && 'showDirectoryPicker' in window && (
+          <div className="relative flex py-1 items-center mb-4">
+            <div className="flex-grow border-t border-neutral-800"></div>
+            <span className="flex-shrink mx-3 text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
+              OU VIA CAMINHO DO SERVIDOR LOCAL
+            </span>
+            <div className="flex-grow border-t border-neutral-800"></div>
           </div>
         )}
 

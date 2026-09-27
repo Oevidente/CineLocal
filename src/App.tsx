@@ -15,6 +15,9 @@ import { IptvPlayerModal } from './components/IptvPlayerModal';
 import { MobileAccessBanner } from './components/MobileAccessBanner';
 import { LibraryData, MediaItem, Episode, OnlineSubtitleOption, TorrentStatus, IptvChannel } from './types';
 import { FolderPlus, Film, Tv, Play, HardDrive, RefreshCw, Radio } from 'lucide-react';
+import { scanDirectoryHandle } from './services/clientScanner';
+import { clientFileRegistry } from './services/clientFileRegistry';
+import { getClientLibrary, verifyPermission } from './services/clientStorage';
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -101,22 +104,53 @@ export default function App() {
     setShowAddModal(true);
   };
 
-  // Fetch library from local server
+  // Fetch library from local server or offline IndexedDB
   const fetchLibrary = useCallback(async () => {
     try {
       const res = await fetch('/api/library', { cache: 'no-store' });
-      if (!res.ok) throw new Error('Falha ao obter biblioteca');
-      const data: LibraryData = await res.json();
-      setLibrary(data);
+      if (res.ok) {
+        const data: LibraryData = await res.json();
+        // Merge with any client-side offline folder items saved in IndexedDB
+        try {
+          const offlineLib = await getClientLibrary();
+          if (offlineLib && offlineLib.items.length > 0) {
+            const serverIds = new Set(data.items.map((i) => i.id));
+            const clientOnly = offlineLib.items.filter((i) => !serverIds.has(i.id));
+            if (clientOnly.length > 0) {
+              data.items = [...data.items, ...clientOnly];
+            }
+          }
+        } catch {}
 
-      // Keep active detail modal synced with new state if open
-      setActiveMediaDetail((prev) => {
-        if (!prev) return null;
-        const refreshed = data.items.find((i) => i.id === prev.id);
-        return refreshed || prev;
-      });
+        setLibrary(data);
+        clientFileRegistry.setInMemoryLibrary(data);
+
+        // Keep active detail modal synced with new state if open
+        setActiveMediaDetail((prev) => {
+          if (!prev) return null;
+          const refreshed = data.items.find((i) => i.id === prev.id);
+          return refreshed || prev;
+        });
+        return;
+      }
     } catch (err) {
-      console.error('Erro carregando library.json:', err);
+      console.warn('[CineLocal] Servidor /api/library indisponível, buscando biblioteca offline...', err);
+    }
+
+    // Fallback: client-side offline library from IndexedDB
+    try {
+      const offlineLib = await getClientLibrary();
+      if (offlineLib) {
+        setLibrary(offlineLib);
+        clientFileRegistry.setInMemoryLibrary(offlineLib);
+        setActiveMediaDetail((prev) => {
+          if (!prev) return null;
+          const refreshed = offlineLib.items.find((i) => i.id === prev.id);
+          return refreshed || prev;
+        });
+      }
+    } catch (offlineErr) {
+      console.error('Erro carregando biblioteca offline:', offlineErr);
     } finally {
       setLoading(false);
     }
@@ -137,7 +171,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.warn('Erro ao re-escanear todas as pastas:', err);
+      console.warn('Erro ao re-escanear todas as pastas no servidor:', err);
     }
   }, []);
 
@@ -148,6 +182,18 @@ export default function App() {
     // 2. Automatically re-scan all registered folders on site open to determine if series or movie
     handleRescanAll();
   }, [fetchLibrary, handleRescanAll]);
+
+  // Client-side File System Access API folder handler
+  const handleAddClientFolder = async (dirHandle: FileSystemDirectoryHandle) => {
+    const hasPermission = await verifyPermission(dirHandle, true);
+    if (!hasPermission) {
+      throw new Error('Permissão negada para acessar a pasta selecionada.');
+    }
+
+    const { mediaItem, updatedLibrary } = await scanDirectoryHandle(dirHandle, library);
+    setLibrary(updatedLibrary);
+    setActiveMediaDetail(mediaItem);
+  };
 
   // Add folder handler
   const handleAddFolder = async (folderPath: string, title?: string) => {
@@ -178,6 +224,14 @@ export default function App() {
 
   // Rescan media folder
   const handleRescan = async (mediaId: string) => {
+    const clientDirHandle = clientFileRegistry.getDirectoryHandle(mediaId);
+    if (clientDirHandle) {
+      const { mediaItem, updatedLibrary } = await scanDirectoryHandle(clientDirHandle, library);
+      setLibrary(updatedLibrary);
+      setActiveMediaDetail(mediaItem);
+      return;
+    }
+
     const res = await fetch(`/api/library/rescan/${mediaId}`, {
       method: 'POST',
     });
@@ -892,6 +946,7 @@ export default function App() {
             setInitialAddFolder('');
           }}
           onAddFolder={handleAddFolder}
+          onAddClientFolder={handleAddClientFolder}
         />
       )}
 
