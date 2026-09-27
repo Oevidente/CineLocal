@@ -89,16 +89,16 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   // Stream connection settings
-  const [streamMode, setStreamMode] = useState<StreamMode>(() => {
-    if (typeof window !== 'undefined' && (window.location.hostname.includes('github.io') || window.location.protocol === 'file:')) {
-      return 'direct';
-    }
-    return 'proxy';
-  });
+  const [streamMode, setStreamMode] = useState<StreamMode>('proxy');
   const [uaProfile, setUaProfile] = useState<UserAgentProfile>('vlc');
   const [geoProfile, setGeoProfile] = useState<GeoProfile>('auto');
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
+
+  // Retry tracking & timeout protection
+  const networkRetriesRef = useRef<number>(0);
+  const mediaRetriesRef = useRef<number>(0);
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Zapping & UI
   const [showChannelList, setShowChannelList] = useState<boolean>(false);
@@ -134,7 +134,14 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
       const selectedReferrer = channel.httpReferrer || '';
       const effectiveCountry = geo === 'auto' ? (channel.country || '') : geo;
 
+      const isStaticHost =
+        typeof window !== 'undefined' &&
+        (window.location.hostname.includes('github.io') || window.location.protocol === 'file:');
+
       if (mode === 'transmux') {
+        if (isStaticHost) {
+          return `https://corsproxy.io/?url=${encodeURIComponent(rawUrl)}`;
+        }
         let transmuxUrl = `/api/iptv/transmux?url=${encodeURIComponent(rawUrl)}`;
         if (selectedUa) transmuxUrl += `&userAgent=${encodeURIComponent(selectedUa)}`;
         if (selectedReferrer) transmuxUrl += `&referrer=${encodeURIComponent(selectedReferrer)}`;
@@ -143,6 +150,10 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
       }
 
       if (mode === 'proxy') {
+        if (isStaticHost) {
+          // On static host without Node.js backend, use high-speed web CORS proxy
+          return `https://corsproxy.io/?url=${encodeURIComponent(rawUrl)}`;
+        }
         let proxyUrl = `/api/iptv/proxy?url=${encodeURIComponent(rawUrl)}`;
         if (selectedUa) proxyUrl += `&userAgent=${encodeURIComponent(selectedUa)}`;
         if (selectedReferrer) proxyUrl += `&referrer=${encodeURIComponent(selectedReferrer)}`;
@@ -169,6 +180,25 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
       setIsLoading(true);
       setErrorMsg(null);
 
+      // Reset retry counters and timeout on new stream load
+      networkRetriesRef.current = 0;
+      mediaRetriesRef.current = 0;
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+      }
+
+      // Safety timeout: 12 seconds max before stopping with user friendly error
+      connectionTimeoutRef.current = setTimeout(() => {
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+        setIsLoading(false);
+        setIsPlaying(false);
+        setErrorMsg('Tempo limite de conexão esgotado (12s). O sinal pode estar temporariamente fora do ar ou com restrição regional.');
+        reportChannelStatus('offline');
+      }, 12000);
+
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -181,6 +211,10 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
 
       // Handle video tag native errors
       video.onerror = () => {
+        if (connectionTimeoutRef.current) {
+          clearTimeout(connectionTimeoutRef.current);
+          connectionTimeoutRef.current = null;
+        }
         setIsLoading(false);
         setIsPlaying(false);
         setErrorMsg('Não foi possível carregar a transmissão. O sinal pode estar temporariamente fora do ar ou com restrição regional.');
@@ -188,6 +222,10 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
       };
 
       video.onplaying = () => {
+        if (connectionTimeoutRef.current) {
+          clearTimeout(connectionTimeoutRef.current);
+          connectionTimeoutRef.current = null;
+        }
         setIsLoading(false);
         setIsPlaying(true);
         reportChannelStatus('online');
@@ -200,6 +238,10 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
         video
           .play()
           .then(() => {
+            if (connectionTimeoutRef.current) {
+              clearTimeout(connectionTimeoutRef.current);
+              connectionTimeoutRef.current = null;
+            }
             setIsLoading(false);
             setIsPlaying(true);
             reportChannelStatus('online');
@@ -219,11 +261,11 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
           maxBufferHole: 0.5,
-          manifestLoadingTimeOut: 15000,
-          manifestLoadingMaxRetry: 3,
-          levelLoadingTimeOut: 15000,
-          fragLoadingTimeOut: 15000,
-          fragLoadingMaxRetry: 3,
+          manifestLoadingTimeOut: 12000,
+          manifestLoadingMaxRetry: 2,
+          levelLoadingTimeOut: 12000,
+          fragLoadingTimeOut: 12000,
+          fragLoadingMaxRetry: 2,
           defaultAudioCodec: 'mp4a.40.2',
         });
 
@@ -231,6 +273,10 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
+          }
           setIsLoading(false);
           reportChannelStatus('online');
           video.play().catch(() => {
@@ -241,19 +287,54 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
         hls.on(Hls.Events.ERROR, (_event, data) => {
           console.warn('[HLS.js Live] Event Error:', data);
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR || data.details === Hls.ErrorDetails.FRAG_PARSING_ERROR) {
-            console.log('[HLS.js] Tentando recuperação de MediaError / fragParsingError...');
-            try {
-              hls.recoverMediaError();
-            } catch (err) {
-              console.warn('[HLS.js] Falha na recuperação de mídia:', err);
+            if (mediaRetriesRef.current < 2) {
+              mediaRetriesRef.current++;
+              console.log(`[HLS.js] Tentando recuperação de MediaError (${mediaRetriesRef.current}/2)...`);
+              try {
+                hls.recoverMediaError();
+              } catch (err) {
+                console.warn('[HLS.js] Falha na recuperação de mídia:', err);
+              }
+            } else {
+              if (connectionTimeoutRef.current) {
+                clearTimeout(connectionTimeoutRef.current);
+                connectionTimeoutRef.current = null;
+              }
+              hls.destroy();
+              setIsLoading(false);
+              setIsPlaying(false);
+              setErrorMsg('Formato de mídia com incompatibilidade no navegador. Experimente o Motor FFmpeg ou abrir no VLC.');
+              reportChannelStatus('offline');
             }
             return;
           }
+
           if (data.fatal) {
             if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-              console.log('[HLS.js] Tentando reconectar fluxo de rede...');
-              hls.startLoad();
+              if (networkRetriesRef.current < 2) {
+                networkRetriesRef.current++;
+                console.log(`[HLS.js] Tentando reconectar fluxo de rede (${networkRetriesRef.current}/2)...`);
+                setTimeout(() => {
+                  if (hlsRef.current === hls) {
+                    hls.startLoad();
+                  }
+                }, 1500);
+              } else {
+                if (connectionTimeoutRef.current) {
+                  clearTimeout(connectionTimeoutRef.current);
+                  connectionTimeoutRef.current = null;
+                }
+                hls.destroy();
+                setIsLoading(false);
+                setIsPlaying(false);
+                setErrorMsg('Não foi possível conectar ao fluxo de transmissão. O sinal pode estar temporariamente fora do ar ou com restrição regional.');
+                reportChannelStatus('offline');
+              }
             } else {
+              if (connectionTimeoutRef.current) {
+                clearTimeout(connectionTimeoutRef.current);
+                connectionTimeoutRef.current = null;
+              }
               hls.destroy();
               setIsLoading(false);
               setIsPlaying(false);
@@ -267,22 +348,35 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Native Safari / iOS HLS
         video.src = effectiveUrl;
-        video.play().then(() => reportChannelStatus('online')).catch(() => setIsPlaying(false));
+        video.play().then(() => {
+          if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
+          }
+          reportChannelStatus('online');
+        }).catch(() => setIsPlaying(false));
       } else {
         video.src = effectiveUrl;
-        video.play().then(() => reportChannelStatus('online')).catch(() => setIsPlaying(false));
+        video.play().then(() => {
+          if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
+          }
+          reportChannelStatus('online');
+        }).catch(() => setIsPlaying(false));
       }
     },
     [getStreamUrl, streamMode, uaProfile, geoProfile, reportChannelStatus]
   );
 
   useEffect(() => {
-    const isStaticHost = typeof window !== 'undefined' && (window.location.hostname.includes('github.io') || window.location.protocol === 'file:');
-    const targetMode: StreamMode = isStaticHost ? 'direct' : streamMode;
-    setStreamMode(targetMode);
-    loadStream(channel.url, targetMode);
+    loadStream(channel.url, streamMode);
 
     return () => {
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
@@ -417,10 +511,14 @@ export const IptvPlayerModal: React.FC<IptvPlayerModalProps> = ({
           setErrorMsg(null);
         }}
         onError={() => {
-          if (streamMode !== 'transmux') {
-            setStreamMode('transmux');
-            loadStream(channel.url, 'transmux');
+          if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
           }
+          setIsLoading(false);
+          setIsPlaying(false);
+          setErrorMsg('Não foi possível carregar a transmissão no navegador.');
+          reportChannelStatus('offline');
         }}
         playsInline
       />

@@ -187,6 +187,7 @@ export async function fetchPlaylistWithFallback(
   try {
     const res = await fetch(`/api/iptv/playlist?url=${encodeURIComponent(url)}${forceRefresh ? '&refresh=true' : ''}`, {
       headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(6000),
     });
     if (res.ok) {
       const data: IptvPlaylistSummary = await res.json();
@@ -206,6 +207,7 @@ export async function fetchPlaylistWithFallback(
   try {
     const directRes = await fetch(url, {
       headers: { Accept: '*/*' },
+      signal: AbortSignal.timeout(10000),
     });
     if (directRes.ok) {
       playlistText = await directRes.text();
@@ -217,14 +219,16 @@ export async function fetchPlaylistWithFallback(
   // 3. Fallback via public CORS proxies if direct fetch was blocked by CORS
   if (!playlistText) {
     const proxies = [
-      (targetUrl: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
       (targetUrl: string) => `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
+      (targetUrl: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
     ];
 
     for (const makeProxy of proxies) {
       try {
         const proxyUrl = makeProxy(url);
-        const proxyRes = await fetch(proxyUrl);
+        const proxyRes = await fetch(proxyUrl, {
+          signal: AbortSignal.timeout(8000),
+        });
         if (proxyRes.ok) {
           playlistText = await proxyRes.text();
           if (playlistText && playlistText.includes('#EXTM3U')) {
