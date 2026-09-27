@@ -162,61 +162,65 @@ export function parseClientM3U(content: string, playlistUrl: string): IptvPlayli
   };
 }
 
+import {
+  getCachedPlaylist,
+  saveCachedPlaylist,
+  getCuratedFallbackBrazilPlaylist,
+} from './iptvCache';
+
 export async function fetchPlaylistWithFallback(
   url: string,
-  forceRefresh = false
+  forceRefresh = false,
+  signal?: AbortSignal
 ): Promise<IptvPlaylistSummary> {
-  const cacheKey = CACHE_PREFIX + url;
-
-  // Check client-side session cache
+  // 1. Check persistent local cache first (unless forceRefresh is true)
   if (!forceRefresh) {
     try {
-      const cached = sessionStorage.getItem(cacheKey);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed && Array.isArray(parsed.channels) && parsed.channels.length > 0) {
-          return parsed;
-        }
+      const cached = await getCachedPlaylist(url);
+      if (cached && Array.isArray(cached.channels) && cached.channels.length > 0) {
+        return cached;
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.warn('[IPTV] Erro ao ler cache local inicial:', err);
     }
   }
 
-  // 1. Try local server endpoint first if running with Node Express
+  // 2. Try local Node.js Express server endpoint if available
   try {
+    const combinedSignal = signal || AbortSignal.timeout(5000);
     const res = await fetch(`/api/iptv/playlist?url=${encodeURIComponent(url)}${forceRefresh ? '&refresh=true' : ''}`, {
       headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(6000),
+      signal: combinedSignal,
     });
     if (res.ok) {
       const data: IptvPlaylistSummary = await res.json();
       if (data && Array.isArray(data.channels) && data.channels.length > 0) {
-        try {
-          sessionStorage.setItem(cacheKey, JSON.stringify(data));
-        } catch {}
+        await saveCachedPlaylist(url, data);
         return data;
       }
     }
-  } catch {
+  } catch (serverErr: any) {
+    if (signal?.aborted) throw new Error('Requisição cancelada.');
     // Backend not running (GitHub Pages static host)
   }
 
-  // 2. Direct browser fetch (works great on iptv-org and all CORS-enabled M3U hosts)
+  // 3. Direct browser fetch (for iptv-org and all CORS-enabled M3U hosts)
   let playlistText = '';
   try {
+    const directSignal = signal || AbortSignal.timeout(8000);
     const directRes = await fetch(url, {
       headers: { Accept: '*/*' },
-      signal: AbortSignal.timeout(10000),
+      signal: directSignal,
     });
     if (directRes.ok) {
       playlistText = await directRes.text();
     }
-  } catch (directErr) {
+  } catch (directErr: any) {
+    if (signal?.aborted) throw new Error('Requisição cancelada.');
     console.warn('[IPTV] Fetch direto falhou (CORS ou rede), tentando proxies:', directErr);
   }
 
-  // 3. Fallback via public CORS proxies if direct fetch was blocked by CORS
+  // 4. Fallback via public CORS proxies if direct fetch was blocked by CORS
   if (!playlistText) {
     const proxies = [
       (targetUrl: string) => `https://corsproxy.io/?url=${encodeURIComponent(targetUrl)}`,
@@ -224,10 +228,12 @@ export async function fetchPlaylistWithFallback(
     ];
 
     for (const makeProxy of proxies) {
+      if (signal?.aborted) throw new Error('Requisição cancelada.');
       try {
         const proxyUrl = makeProxy(url);
+        const proxySignal = signal || AbortSignal.timeout(6000);
         const proxyRes = await fetch(proxyUrl, {
-          signal: AbortSignal.timeout(8000),
+          signal: proxySignal,
         });
         if (proxyRes.ok) {
           playlistText = await proxyRes.text();
@@ -235,19 +241,36 @@ export async function fetchPlaylistWithFallback(
             break;
           }
         }
-      } catch (proxyErr) {
+      } catch (proxyErr: any) {
+        if (signal?.aborted) throw new Error('Requisição cancelada.');
         console.warn('[IPTV] Proxy falhou:', proxyErr);
       }
     }
   }
 
-  if (!playlistText || !playlistText.trim()) {
-    throw new Error('Não foi possível carregar a lista de canais IPTV. Verifique a URL ou conexão de internet.');
+  // 5. If download succeeded, parse and save to persistent cache
+  if (playlistText && playlistText.trim()) {
+    const parsed = parseClientM3U(playlistText, url);
+    await saveCachedPlaylist(url, parsed);
+    return parsed;
   }
 
-  const parsed = parseClientM3U(playlistText, url);
+  // 6. Stale Cache Recovery (if any cached version exists, use it instead of failing!)
   try {
-    sessionStorage.setItem(cacheKey, JSON.stringify(parsed));
+    const staleCached = await getCachedPlaylist(url);
+    if (staleCached && Array.isArray(staleCached.channels) && staleCached.channels.length > 0) {
+      console.warn('[IPTV] Usando versão salva em cache após falha de download.');
+      return staleCached;
+    }
   } catch {}
-  return parsed;
+
+  // 7. Offline Curated Fallback for Brazil
+  if (url.includes('br.m3u') || url.includes('countries/br')) {
+    console.warn('[IPTV] Usando catálogo pré-configurado offline para o Brasil.');
+    const curated = getCuratedFallbackBrazilPlaylist(url);
+    await saveCachedPlaylist(url, curated);
+    return curated;
+  }
+
+  throw new Error('Não foi possível carregar a lista de canais IPTV. Verifique a URL ou sua conexão.');
 }

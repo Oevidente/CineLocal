@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Tv,
   Radio,
@@ -23,7 +23,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { IptvChannel, IptvPreset, IptvPlaylistSummary, ChannelStatusInfo } from '../types';
-import { CLIENT_IPTV_PRESETS, fetchPlaylistWithFallback } from '../services/clientIptv';
+import { CLIENT_IPTV_PRESETS, fetchPlaylistWithFallback, parseClientM3U } from '../services/clientIptv';
+import { getCachedPlaylist, saveCachedPlaylist } from '../services/iptvCache';
 
 interface ChannelsPageProps {
   onPlayChannel: (channel: IptvChannel, allChannels: IptvChannel[]) => void;
@@ -42,7 +43,7 @@ export const ChannelsPage: React.FC<ChannelsPageProps> = ({
     return localStorage.getItem('cine_iptv_playlist_url') || DEFAULT_PLAYLIST_URL;
   });
   const [playlistData, setPlaylistData] = useState<IptvPlaylistSummary | null>(null);
-  const [presets, setPresets] = useState<IptvPreset[]>([]);
+  const [presets, setPresets] = useState<IptvPreset[]>(CLIENT_IPTV_PRESETS);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -61,6 +62,11 @@ export const ChannelsPage: React.FC<ChannelsPageProps> = ({
   const [showCustomModal, setShowCustomModal] = useState<boolean>(false);
   const [customUrlInput, setCustomUrlInput] = useState<string>('');
 
+  // Anti-loop and cancellation refs
+  const activeRequestIdRef = useRef<number>(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef<boolean>(true);
+
   const ITEMS_PER_PAGE = 48;
 
   // Load presets & status map
@@ -73,12 +79,10 @@ export const ChannelsPage: React.FC<ChannelsPageProps> = ({
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
           setPresets(data);
-        } else {
-          setPresets(CLIENT_IPTV_PRESETS);
         }
       })
       .catch(() => {
-        setPresets(CLIENT_IPTV_PRESETS);
+        // Fallback already preloaded
       });
 
     fetch('/api/iptv/statuses')
@@ -91,27 +95,98 @@ export const ChannelsPage: React.FC<ChannelsPageProps> = ({
       .catch(() => {});
   }, []);
 
-  // Fetch playlist
+  // Fetch playlist with asynchronous cache-first mechanism and anti-loop safety
   const loadPlaylist = useCallback(async (url: string, forceRefresh = false) => {
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      const data = await fetchPlaylistWithFallback(url, forceRefresh);
-      setPlaylistData(data);
-      setCurrentPage(1);
-    } catch (err: any) {
-      console.error('Erro ao buscar canais:', err);
-      setErrorMsg(err.message || 'Não foi possível baixar os canais. Verifique a URL ou conexão.');
-    } finally {
-      setIsLoading(false);
+    const requestId = ++activeRequestIdRef.current;
+
+    // 1. Instant Cache-First check (0ms display, prevents screen lock)
+    if (!forceRefresh) {
+      try {
+        const cached = await getCachedPlaylist(url);
+        if (cached && activeRequestIdRef.current === requestId && isMountedRef.current) {
+          setPlaylistData(cached);
+          setIsLoading(false);
+          setErrorMsg(null);
+          return;
+        }
+      } catch (err) {
+        console.warn('[ChannelsPage] Erro ao ler cache local:', err);
+      }
     }
-  }, []);
+
+    // Only show loading if we don't have channels in memory yet
+    if (!playlistData || forceRefresh) {
+      setIsLoading(true);
+    }
+    setErrorMsg(null);
+
+    // Cancel previous fetch if any
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    // Safety timeout: 10 seconds max before aborting to prevent infinite pending state
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, 10000);
+
+    try {
+      const data = await fetchPlaylistWithFallback(url, forceRefresh, abortController.signal);
+      clearTimeout(timeoutId);
+
+      if (activeRequestIdRef.current === requestId && isMountedRef.current) {
+        setPlaylistData(data);
+        setCurrentPage(1);
+        setErrorMsg(null);
+      }
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+
+      // If superseded by a newer request or unmounted, ignore
+      if (activeRequestIdRef.current !== requestId || !isMountedRef.current) {
+        return;
+      }
+
+      // Check if we can recover from cache
+      try {
+        const fallbackCached = await getCachedPlaylist(url);
+        if (fallbackCached && fallbackCached.channels?.length > 0) {
+          setPlaylistData(fallbackCached);
+          setErrorMsg(null);
+          return;
+        }
+      } catch {}
+
+      console.error('Erro ao carregar canais IPTV:', err);
+      setErrorMsg(
+        err.message || 'Não foi possível baixar os canais. Verifique a URL ou conexão de internet.'
+      );
+    } finally {
+      if (activeRequestIdRef.current === requestId && isMountedRef.current) {
+        setIsLoading(false);
+      }
+    }
+  }, [playlistData]);
 
   useEffect(() => {
+    isMountedRef.current = true;
     loadPlaylist(playlistUrl);
-  }, [playlistUrl, loadPlaylist]);
+
+    return () => {
+      isMountedRef.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, [playlistUrl]);
 
   const handleSelectPreset = (url: string) => {
+    if (url === playlistUrl) {
+      loadPlaylist(url, true);
+      return;
+    }
     setPlaylistUrl(url);
     localStorage.setItem('cine_iptv_playlist_url', url);
   };
@@ -129,18 +204,16 @@ export const ChannelsPage: React.FC<ChannelsPageProps> = ({
     if (!file) return;
 
     setIsLoading(true);
+    setErrorMsg(null);
     try {
       const text = await file.text();
-      const res = await fetch('/api/iptv/parse-custom', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text, name: file.name }),
-      });
-      if (!res.ok) throw new Error('Falha ao processar arquivo M3U');
-      const data = await res.json();
-      setPlaylistData(data);
+      // Client-side offline parsing without relying on backend server
+      const parsed = parseClientM3U(text, `Arquivo Local: ${file.name}`);
+      await saveCachedPlaylist(`Arquivo Local: ${file.name}`, parsed);
+      setPlaylistData(parsed);
       setPlaylistUrl(`Arquivo Local: ${file.name}`);
       setShowCustomModal(false);
+      setCurrentPage(1);
     } catch (err: any) {
       alert(`Erro: ${err.message}`);
     } finally {
@@ -535,32 +608,61 @@ export const ChannelsPage: React.FC<ChannelsPageProps> = ({
         </div>
       </div>
 
-      {/* Loading State */}
-      {isLoading && (
-        <div className="flex flex-col items-center justify-center py-24 text-center">
-          <div className="w-12 h-12 border-4 border-[#E50914] border-t-transparent rounded-full animate-spin mb-4"></div>
-          <p className="text-white font-semibold text-lg">Carregando canais IPTV...</p>
-          <p className="text-neutral-400 text-xs mt-1">Baixando e indexando a lista de transmissão</p>
+      {/* Non-blocking background revalidation indicator */}
+      {isLoading && playlistData && (
+        <div className="flex items-center justify-center space-x-2 py-2 mb-4 bg-zinc-900/60 rounded-lg border border-neutral-800 text-xs text-neutral-400">
+          <RefreshCw className="w-3.5 h-3.5 text-red-500 animate-spin" />
+          <span>Sincronizando catálogo de canais com a internet...</span>
         </div>
       )}
 
-      {/* Error Message */}
-      {errorMsg && !isLoading && (
-        <div className="bg-red-950/40 border border-red-800 rounded-xl p-6 text-center my-8 max-w-lg mx-auto">
-          <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-3" />
-          <h3 className="text-lg font-bold text-white mb-1">Erro ao Carregar Canais</h3>
-          <p className="text-neutral-300 text-sm mb-4">{errorMsg}</p>
+      {/* Inline Warning if background sync failed but cached channels are visible */}
+      {errorMsg && playlistData && (
+        <div className="flex items-center justify-between px-4 py-2.5 mb-4 bg-amber-950/40 border border-amber-800/60 rounded-lg text-xs text-amber-300">
+          <span>⚠️ {errorMsg} (Exibindo canais salvos em cache local)</span>
           <button
             onClick={() => loadPlaylist(playlistUrl, true)}
-            className="px-4 py-2 bg-[#E50914] hover:bg-[#b80710] text-white rounded-lg text-xs font-bold transition-all shadow-md cursor-pointer"
+            className="ml-3 px-2.5 py-1 bg-amber-800 hover:bg-amber-700 text-white rounded font-medium cursor-pointer transition-colors"
           >
             Tentar Novamente
           </button>
         </div>
       )}
 
+      {/* Initial Full Loading State (only when no cache exists yet) */}
+      {isLoading && !playlistData && (
+        <div className="flex flex-col items-center justify-center py-24 text-center">
+          <div className="w-12 h-12 border-4 border-[#E50914] border-t-transparent rounded-full animate-spin mb-4"></div>
+          <p className="text-white font-semibold text-lg">Carregando canais IPTV...</p>
+          <p className="text-neutral-400 text-xs mt-1">Buscando lista e consultando cache local do navegador</p>
+        </div>
+      )}
+
+      {/* Error Message when no channels are available */}
+      {errorMsg && !playlistData && (
+        <div className="bg-red-950/40 border border-red-800 rounded-xl p-6 text-center my-8 max-w-lg mx-auto">
+          <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-3" />
+          <h3 className="text-lg font-bold text-white mb-1">Erro ao Carregar Canais</h3>
+          <p className="text-neutral-300 text-sm mb-4">{errorMsg}</p>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              onClick={() => loadPlaylist(playlistUrl, true)}
+              className="px-4 py-2 bg-[#E50914] hover:bg-[#b80710] text-white rounded-lg text-xs font-bold transition-all shadow-md cursor-pointer"
+            >
+              Tentar Novamente
+            </button>
+            <button
+              onClick={() => handleSelectPreset(DEFAULT_PLAYLIST_URL)}
+              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg text-xs font-bold transition-all border border-neutral-700 cursor-pointer"
+            >
+              Restaurar Brasil 🇧🇷
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Channel Grid / List */}
-      {!isLoading && !errorMsg && (
+      {playlistData && (
         <>
           {filteredChannels.length === 0 ? (
             <div className="bg-zinc-900/40 border border-neutral-800 rounded-xl p-12 text-center my-8">
